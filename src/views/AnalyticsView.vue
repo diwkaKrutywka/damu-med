@@ -15,6 +15,13 @@ import {
   Filler
 } from 'chart.js'
 import { useNotification } from '@/composables/useNotification'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // Register Chart.js components
 ChartJS.register(
@@ -338,28 +345,43 @@ onMounted(() => {
       <div class="filters-bar">
         <div class="filter-group">
           <span class="filter-label">Период:</span>
-          <select v-model="periodFilter" class="filter-select" @change="updateCharts">
-            <option value="today">Сегодня</option>
-            <option value="week">Неделя</option>
-            <option value="month">Месяц</option>
-            <option value="quarter">Квартал</option>
-          </select>
+          <Select v-model="periodFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue placeholder="Выберите период" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="today">Сегодня</SelectItem>
+              <SelectItem value="week">Неделя</SelectItem>
+              <SelectItem value="month">Месяц</SelectItem>
+              <SelectItem value="quarter">Квартал</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="filter-group">
           <span class="filter-label">Тип:</span>
-          <select v-model="typeFilter" class="filter-select" @change="updateCharts">
-            <option value="all">Все звонки</option>
-            <option value="incoming">Входящие</option>
-            <option value="outgoing">Исходящие</option>
-          </select>
+          <Select v-model="typeFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue placeholder="Выберите тип" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все звонки</SelectItem>
+              <SelectItem value="incoming">Входящие</SelectItem>
+              <SelectItem value="outgoing">Исходящие</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="filter-group">
           <span class="filter-label">Робот:</span>
-          <select v-model="robotFilter" class="filter-select" @change="updateCharts">
-            <option value="all">Все роботы</option>
-            <option value="generative">Генеративный</option>
-            <option value="scripted">Сценарный</option>
-          </select>
+          <Select v-model="robotFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue placeholder="Выберите робота" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все роботы</SelectItem>
+              <SelectItem value="generative">Генеративный</SelectItem>
+              <SelectItem value="scripted">Сценарный</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <button class="btn btn-secondary btn-sm generate-btn" @click="generateData(50)">
           +50 записей
@@ -895,17 +917,36 @@ onMounted(() => {
 }
 
 .filter-select {
+  min-width: 140px;
   padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-default);
+  background-color: var(--bg-secondary) !important;
+  border: 1px solid var(--border-default) !important;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
+  height: auto;
 }
 
-.filter-select:focus {
+.filter-select:hover {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.filter-select:focus,
+.filter-select:focus-visible {
   outline: none;
-  border-color: var(--accent-cyan);
+  border-color: var(--accent-cyan) !important;
+  background-color: var(--bg-secondary) !important;
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+}
+
+/* Deep selector to override shadcn styles */
+.filter-group :deep(button[data-slot="select-trigger"]) {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-default) !important;
+}
+
+.filter-group :deep(button[data-slot="select-trigger"]:hover) {
+  background-color: var(--bg-tertiary) !important;
 }
 
 .generate-btn {
