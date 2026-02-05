@@ -17,7 +17,6 @@ const logs = ref([])
 const selectedDoctor = ref(null)
 const selectedDate = ref(null)
 const selectedTime = ref(null)
-const currentMonth = ref(new Date())
 const kbQuery = ref('')
 const kbResult = ref(null)
 const activeKbTopic = ref(null)
@@ -32,12 +31,14 @@ const lastBotText = ref('') // Для отслеживания уже показ
 const transcriptRef = ref(null) // Реф для контейнера сообщений
 const logsRef = ref(null) // Реф для контейнера логов
 let typingInterval = null // Интервал для эффекта печатания
+let currentTypingMsgId = null // ID текущего печатаемого сообщения
 
 // Данные из API функций
 const specialtiesList = ref([]) // Список специальностей
 const doctorsList = ref([]) // Список врачей
 const availableSlots = ref([]) // Доступные временные слоты
 const appointmentData = ref(null) // Данные созданной записи
+const appointmentError = ref(false) // Ошибка создания записи
 const functionLoading = ref(false) // Индикатор загрузки функции
 const slotsDate = ref(null) // Выбранная дата из API get_available_slots
 
@@ -56,8 +57,6 @@ const doctors = [
   { id: 3, name: 'Сидоров К.В.', specialty: 'Невролог', rating: 4.7, avatar: 'СК' },
   { id: 4, name: 'Козлова Е.И.', specialty: 'Эндокринолог', rating: 4.9, avatar: 'КЕ' }
 ]
-
-const timeSlots = ['09:00', '09:30', '10:00', '10:30', '11:00', '14:00', '14:30', '15:00', '15:30', '16:00']
 
 const knowledgeBase = {
   price: { title: 'Цены на услуги', full: 'Первичный приём терапевта — 5000₸. Повторный приём — 3500₸.', short: 'Первичный — 5000₸, повторный — 3500₸' },
@@ -121,33 +120,6 @@ const formattedTime = computed(() => {
   const mins = Math.floor(callTime.value / 60).toString().padStart(2, '0')
   const secs = (callTime.value % 60).toString().padStart(2, '0')
   return `${mins}:${secs}`
-})
-
-const calendarDays = computed(() => {
-  const year = currentMonth.value.getFullYear()
-  const month = currentMonth.value.getMonth()
-  const firstDay = new Date(year, month, 1).getDay()
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const today = new Date()
-  const startDay = firstDay === 0 ? 6 : firstDay - 1
-
-  const days = []
-  for (let i = 0; i < startDay; i++) {
-    days.push({ day: '', disabled: true })
-  }
-  for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(year, month, d)
-    const isPast = date < new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const isToday = date.toDateString() === today.toDateString()
-    const isSelected = selectedDate.value && date.toDateString() === selectedDate.value.toDateString()
-    days.push({ day: d, disabled: isPast, today: isToday, selected: isSelected })
-  }
-  return days
-})
-
-const monthName = computed(() => {
-  const names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-  return `${names[currentMonth.value.getMonth()]} ${currentMonth.value.getFullYear()}`
 })
 
 // Methods
@@ -234,7 +206,7 @@ const formatDateLocal = (date) => {
   return `${yyyy}-${mm}-${dd}`
 }
 
-// Парсинг даты из текста (например "на 9 февраля", "на завтра", "на послезавтра")
+// Парсинг даты из текста (например "на 9 февраля", "сегодня", "завтра", "послезавтра")
 const parseDateFromText = (text) => {
   if (!text) return null
 
@@ -244,18 +216,23 @@ const parseDateFromText = (text) => {
     'июл': 6, 'август': 7, 'сентябр': 8, 'октябр': 9, 'ноябр': 10, 'декабр': 11
   }
 
-  // "на завтра"
-  if (/на\s+завтра/i.test(text)) {
-    const tomorrow = new Date(today)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    return formatDateLocal(tomorrow)
+  // "сегодня" или "на сегодня"
+  if (/(?:на\s+)?сегодня/i.test(text)) {
+    return formatDateLocal(today)
   }
 
-  // "на послезавтра"
-  if (/на\s+послезавтра/i.test(text)) {
+  // "послезавтра" или "на послезавтра" (ВАЖНО: проверять ДО "завтра"!)
+  if (/(?:на\s+)?послезавтра/i.test(text)) {
     const dayAfter = new Date(today)
     dayAfter.setDate(dayAfter.getDate() + 2)
     return formatDateLocal(dayAfter)
+  }
+
+  // "завтра" или "на завтра"
+  if (/(?:на\s+)?завтра/i.test(text)) {
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return formatDateLocal(tomorrow)
   }
 
   // "на 9 февраля" или "9 февраля"
@@ -288,21 +265,34 @@ const parseDateFromText = (text) => {
 const checkBotTextForSlots = (text) => {
   if (!text) return
 
-  // Ищем паттерны типа "свободно", "свободные окна", "есть время"
-  const hasSlotKeywords = /свободн|есть\s+врем|доступн|можем\s+записать|окошк/i.test(text)
-  const times = parseTimesFromText(text)
+  // Если текст - JSON строка, извлекаем answer
+  let actualText = text
+  if (typeof text === 'string' && text.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text)
+      actualText = parsed.answer || parsed.text || text
+    } catch (e) {
+      // Не JSON, используем как есть
+    }
+  }
+
+  // Ищем паттерны типа "свободно", "есть 9:00", "доступно"
+  // Также проверяем времена + дата (сегодня/завтра/послезавтра/на 8 февраля)
+  const times = parseTimesFromText(actualText)
+  const hasSlotKeywords = /свободн|есть\s+\d{1,2}:\d{2}|есть\s+врем|доступн|можем\s+записать|окошк/i.test(actualText) ||
+                          (times.length > 0 && /(?:на\s+)?(?:сегодня|завтра|послезавтра|\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр))/i.test(actualText))
 
   if (hasSlotKeywords && times.length > 0) {
     console.log('=== BOT TEXT HAS SLOTS ===')
-    console.log('Text:', text)
+    console.log('Text:', actualText)
     console.log('Parsed times:', times)
 
     // Пробуем получить дату из текста
-    const dateFromText = parseDateFromText(text)
+    const dateFromText = parseDateFromText(actualText)
     console.log('Date from text:', dateFromText)
 
-    // Если нашли дату, обновляем визуализацию
-    if (dateFromText) {
+    // Если нашли дату, обновляем визуализацию (но не перезаписываем confirmation!)
+    if (dateFromText && stage.value !== 'confirmation') {
       stage.value = 'calendar'
       slotsDate.value = dateFromText
       availableSlots.value = times.map(time => ({
@@ -365,6 +355,9 @@ const processFunctionData = (func, botText = null) => {
     case 'get_available_slots':
     case 'get_doctor_schedule':
       {
+        // Не перезаписываем confirmation
+        if (stage.value === 'confirmation') break
+
         console.log('=== PROCESSING SLOTS ===')
         stage.value = 'calendar'
 
@@ -420,8 +413,13 @@ const processFunctionData = (func, botText = null) => {
 
     case 'create_appointment':
     case 'book_appointment':
+      console.log('=== CREATE APPOINTMENT (processFunctionData) ===')
+      console.log('Setting appointmentData to:', parsedResult)
       appointmentData.value = parsedResult
       stage.value = 'confirmation'
+      console.log('appointmentData.value is now:', appointmentData.value)
+      console.log('stage is now:', stage.value)
+      // НЕ обнуляем currentFunction здесь - сделаем это в function_ended
       break
   }
 
@@ -441,8 +439,8 @@ const handleWebSocketMessage = (data) => {
   console.log('WS data.type:', data.type)
   console.log('WS keys:', Object.keys(data))
 
-  // Проверяем есть ли function в любом сообщении (независимо от type)
-  if (data.function) {
+  // Проверяем есть ли function в любом сообщении (кроме function_ended - он обрабатывается отдельно)
+  if (data.function && data.type !== 'function_ended') {
     console.log('!!! FOUND function in message !!!', data.function)
     // Передаём текст бота (может быть в data.text) для парсинга времени
     processFunctionData(data.function, data.text || null)
@@ -625,8 +623,10 @@ const handleWebSocketMessage = (data) => {
           case 'get_available_slots':
           case 'get_doctor_schedule':
             {
+              // Не перезаписываем confirmation
+              if (stage.value === 'confirmation') break
+
               console.log('=== PROCESSING get_available_slots ===')
-              // Принудительно устанавливаем stage на calendar
               stage.value = 'calendar'
 
               console.log('parsedResult:', parsedResult)
@@ -673,8 +673,35 @@ const handleWebSocketMessage = (data) => {
             break
           case 'create_appointment':
           case 'book_appointment':
-            appointmentData.value = parsedResult
-            stage.value = 'confirmation'
+            console.log('=== function_ended: CREATE APPOINTMENT ===')
+            console.log('Setting appointmentData to:', parsedResult)
+
+            // Проверяем, есть ли валидные данные в результате
+            const hasValidData = parsedResult && (
+              parsedResult.doctor ||
+              parsedResult.doctor_name ||
+              parsedResult.datetime ||
+              parsedResult.date ||
+              parsedResult.appointment_date ||
+              parsedResult.code ||
+              parsedResult.id
+            )
+
+            if (hasValidData) {
+              appointmentData.value = parsedResult
+              appointmentError.value = false
+              stage.value = 'confirmation'
+            } else {
+              // Нет данных - показываем ошибку
+              console.log('No valid appointment data received')
+              appointmentData.value = null
+              appointmentError.value = true
+              stage.value = 'confirmation'
+            }
+            // Скрываем карточку функции - показываем сразу confirmation
+            currentFunction.value = null
+            console.log('appointmentData.value is now:', appointmentData.value)
+            console.log('appointmentError.value is now:', appointmentError.value)
             break
         }
 
@@ -922,32 +949,58 @@ const addMessage = (sender, text) => {
   const msgId = Date.now()
   const time = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
-  if (sender === 'robot') {
-    // Для робота - эффект печатания
-    messages.value.push({ id: msgId, sender, text: '', fullText: text, time, isTyping: true })
+  // Если текст - JSON строка, извлекаем answer
+  let displayText = text
+  if (typeof text === 'string' && text.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text)
+      displayText = parsed.answer || parsed.text || text
+    } catch (e) {
+      // Не JSON, используем как есть
+    }
+  }
 
-    // Останавливаем предыдущую анимацию
+  if (sender === 'robot') {
+    // Останавливаем предыдущую анимацию и завершаем предыдущее сообщение
     if (typingInterval) {
       clearInterval(typingInterval)
+      typingInterval = null
+      // Завершаем предыдущее сообщение - показываем полный текст
+      if (currentTypingMsgId) {
+        const prevMsg = messages.value.find(m => m.id === currentTypingMsgId)
+        if (prevMsg && prevMsg.fullText) {
+          prevMsg.text = prevMsg.fullText
+          prevMsg.isTyping = false
+        }
+      }
     }
+
+    // Скрываем индикатор "три точки" - теперь сообщение будет печататься
+    isTyping.value = false
+    partialBotText.value = ''
+
+    // Для робота - эффект печатания
+    messages.value.push({ id: msgId, sender, text: '', fullText: displayText, time, isTyping: true })
+    currentTypingMsgId = msgId
 
     let charIndex = 0
     const msg = messages.value.find(m => m.id === msgId)
 
     typingInterval = setInterval(() => {
-      if (charIndex < text.length) {
-        msg.text = text.substring(0, charIndex + 1)
+      if (charIndex < displayText.length) {
+        msg.text = displayText.substring(0, charIndex + 1)
         charIndex++
         scrollToBottom()
       } else {
         clearInterval(typingInterval)
         typingInterval = null
+        currentTypingMsgId = null
         msg.isTyping = false
       }
     }, 25) // Скорость печати - 25ms на символ
   } else {
     // Для пользователя - сразу показываем
-    messages.value.push({ id: msgId, sender, text, time })
+    messages.value.push({ id: msgId, sender, text: displayText, time })
   }
 }
 
@@ -995,7 +1048,6 @@ const resetDemo = () => {
   kbResult.value = null
   activeKbTopic.value = null
   currentIntent.value = ''
-  currentMonth.value = new Date()
   isTyping.value = false
   partialBotText.value = ''
   partialUserText.value = ''
@@ -1007,22 +1059,11 @@ const resetDemo = () => {
   doctorsList.value = []
   availableSlots.value = []
   appointmentData.value = null
+  appointmentError.value = false
   functionLoading.value = false
   slotsDate.value = null
 
   show('Демо сброшено', 'success')
-}
-
-const prevMonth = () => {
-  const d = new Date(currentMonth.value)
-  d.setMonth(d.getMonth() - 1)
-  currentMonth.value = d
-}
-
-const nextMonth = () => {
-  const d = new Date(currentMonth.value)
-  d.setMonth(d.getMonth() + 1)
-  currentMonth.value = d
 }
 
 const clearLogs = () => {
@@ -1104,6 +1145,28 @@ const getAppointmentField = (field) => {
       // Из вложенного clinic или прямое поле
       if (data.clinic?.phone) return data.clinic.phone
       return data.phone || data.clinic_phone || null
+
+    case 'patient':
+      // ФИО пациента
+      if (data.patient?.full_name) return data.patient.full_name
+      if (data.patient?.first_name && data.patient?.last_name) {
+        return `${data.patient.last_name} ${data.patient.first_name}${data.patient.patronymic ? ' ' + data.patient.patronymic : ''}`
+      }
+      return data.patient_name || null
+
+    case 'patient_phone':
+      // Телефон пациента
+      if (data.patient?.phone) return data.patient.phone
+      return data.patient_phone || null
+
+    case 'clinic':
+      // Название клиники
+      if (data.clinic?.name) return data.clinic.name
+      return data.clinic_name || null
+
+    case 'code':
+      // Код записи
+      return data.code || data.appointment_code || null
 
     default:
       return data[field] || null
@@ -1298,21 +1361,8 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- Печатающийся текст бота -->
-              <div v-if="partialBotText" class="message robot typing-message">
-                <div class="message-avatar robot">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                  </svg>
-                </div>
-                <div class="message-content">
-                  <div class="message-sender">Асель (AI)</div>
-                  <div class="message-text">{{ partialBotText }}<span class="typing-cursor">|</span></div>
-                </div>
-              </div>
-
-              <!-- Индикатор печатания бота -->
-              <div v-if="isTyping && !partialBotText" class="message robot typing-message">
+              <!-- Индикатор печатания бота (три точки пока получаем текст) -->
+              <div v-if="isTyping || partialBotText" class="message robot typing-message">
                 <div class="message-avatar robot">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -1343,55 +1393,18 @@ onUnmounted(() => {
             </div>
 
             <div class="visual-content">
-              <!-- Function Call Overlay -->
-              <div v-if="currentFunction" class="function-call-card">
-                <div class="function-call-header">
-                  <div class="function-call-icon" :class="{ completed: currentFunction.result !== null }">
-                    <svg v-if="currentFunction.result === null" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <!-- AI Thinking Loader (while function is executing) -->
+              <div v-if="functionLoading && currentFunction" class="ai-thinking-overlay">
+                <div class="ai-thinking-content">
+                  <div class="ai-thinking-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="10"/>
                       <path d="M12 6v6l4 2"/>
                     </svg>
-                    <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="20 6 9 17 4 12"/>
-                    </svg>
                   </div>
-                  <div class="function-call-title">
-                    <span class="function-name">{{ currentFunction.name }}</span>
-                    <span class="function-status">{{ currentFunction.result === null ? 'Выполняется...' : 'Завершено' }}</span>
-                  </div>
-                </div>
-
-                <div class="function-call-args">
-                  <div class="function-args-label">Аргументы:</div>
-                  <pre class="function-args-content">{{ JSON.stringify(currentFunction.args, null, 2) }}</pre>
-                </div>
-
-                <div v-if="currentFunction.result !== null" class="function-call-result">
-                  <div class="function-result-label">Результат:</div>
-                  <div class="function-result-content">
-                    <template v-if="Array.isArray(currentFunction.result)">
-                      <div class="function-result-count">Получено: {{ currentFunction.result.length }} элементов</div>
-                      <div class="function-result-items">
-                        <div v-for="(item, idx) in currentFunction.result.slice(0, 5)" :key="idx" class="function-result-item">
-                          <span class="result-item-name">{{ item.name || item.title || JSON.stringify(item).slice(0, 50) }}</span>
-                          <span v-if="item.description" class="result-item-desc">{{ item.description }}</span>
-                        </div>
-                        <div v-if="currentFunction.result.length > 5" class="function-result-more">
-                          ... и ещё {{ currentFunction.result.length - 5 }} элементов
-                        </div>
-                      </div>
-                    </template>
-                    <template v-else-if="typeof currentFunction.result === 'object'">
-                      <pre class="function-result-json">{{ JSON.stringify(currentFunction.result, null, 2) }}</pre>
-                    </template>
-                    <template v-else>
-                      <div class="function-result-text">{{ currentFunction.result }}</div>
-                    </template>
-                  </div>
-                </div>
-
-                <div v-else class="function-call-loading">
-                  <div class="function-loading-dots">
+                  <div class="ai-thinking-text">AI думает...</div>
+                  <div class="ai-thinking-function">{{ currentFunction.name.replace(/_/g, ' ') }}</div>
+                  <div class="ai-thinking-dots">
                     <span></span><span></span><span></span>
                   </div>
                 </div>
@@ -1458,10 +1471,10 @@ onUnmounted(() => {
                 <div v-else-if="specialtiesList.length > 0" class="specialties-list">
                   <div class="specialties-count">Найдено: {{ specialtiesList.length }} специальностей</div>
                   <div class="specialties-grid">
-                    <div v-for="spec in specialtiesList.slice(0, 12)" :key="spec.id" class="specialty-card">
+                    <div v-for="spec in specialtiesList.slice(0, 12)" :key="spec.id" class="specialty-card" style="min-height: 150px;">
                       <div class="specialty-name">{{ spec.name }}</div>
                       <div v-if="spec.description" class="specialty-desc">{{ spec.description }}</div>
-                      <div v-if="spec.doctor_count" class="specialty-count">
+                      <div v-if="spec.doctor_count" class="specialty-count" style="bottom: 0; margin-top:auto;">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                           <circle cx="9" cy="7" r="4"/>
@@ -1599,35 +1612,9 @@ onUnmounted(() => {
                   <p>На {{ formatAppointmentDate(slotsDate) }} нет свободных окон</p>
                 </div>
 
-                <!-- Fallback: полный календарь (до получения данных от API) -->
-                <div v-else class="calendar-container">
-                  <div class="calendar-section">
-                    <div class="calendar-header">
-                      <h5>{{ monthName }}</h5>
-                      <div class="calendar-nav">
-                        <button @click="prevMonth">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-                        </button>
-                        <button @click="nextMonth">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                        </button>
-                      </div>
-                    </div>
-                    <div class="calendar-days">
-                      <div class="calendar-day-name" v-for="d in ['Пн','Вт','Ср','Чт','Пт','Сб','Вс']" :key="d">{{ d }}</div>
-                      <div v-for="(day, i) in calendarDays" :key="i" class="calendar-day" :class="{ disabled: day.disabled, today: day.today, selected: day.selected }">
-                        {{ day.day }}
-                      </div>
-                    </div>
-                  </div>
-                  <div class="time-slots">
-                    <div class="time-slots-title">Свободные окна:</div>
-                    <div class="time-slots-grid">
-                      <button v-for="time in timeSlots" :key="time" class="time-slot" :class="{ selected: selectedTime === time }">
-                        {{ time }}
-                      </button>
-                    </div>
-                  </div>
+                <!-- Ожидание данных о дате -->
+                <div v-else class="empty-state">
+                  <p>Ожидание выбора даты...</p>
                 </div>
               </div>
 
@@ -1678,7 +1665,37 @@ onUnmounted(() => {
 
               <!-- Confirmation -->
               <div v-else-if="stage === 'confirmation'" class="visual-stage-content">
-                <div class="confirmation-card">
+                <!-- Ошибка создания записи -->
+                <div v-if="appointmentError" class="confirmation-card error-card">
+                  <div class="confirmation-icon error-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="15" y1="9" x2="9" y2="15"/>
+                      <line x1="9" y1="9" x2="15" y2="15"/>
+                    </svg>
+                  </div>
+                  <h3>Упс! Не удалось создать запись</h3>
+                  <p class="text-secondary">Произошла ошибка при создании записи. Попробуйте ещё раз или обратитесь к администратору.</p>
+
+                  <div class="confirmation-actions">
+                    <button class="btn btn-primary btn-sm" @click="stage = 'active'; appointmentError = false">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M1 4v6h6"/>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                      </svg>
+                      Попробовать снова
+                    </button>
+                    <router-link to="/" class="btn btn-secondary btn-sm">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                      </svg>
+                      К стендам
+                    </router-link>
+                  </div>
+                </div>
+
+                <!-- Успешная запись -->
+                <div v-else class="confirmation-card">
                   <div class="confirmation-icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="20 6 9 17 4 12"/>
@@ -1689,7 +1706,17 @@ onUnmounted(() => {
 
                   <!-- Данные из API -->
                   <div v-if="appointmentData" class="confirmation-details">
-                    <!-- Врач (вложенный объект или прямое поле) -->
+                    <!-- Код записи -->
+                    <div v-if="getAppointmentField('code')" class="confirmation-row">
+                      <span class="confirmation-label">Код записи</span>
+                      <span class="confirmation-value confirmation-code">{{ getAppointmentField('code') }}</span>
+                    </div>
+                    <!-- Пациент -->
+                    <div v-if="getAppointmentField('patient')" class="confirmation-row">
+                      <span class="confirmation-label">Пациент</span>
+                      <span class="confirmation-value">{{ getAppointmentField('patient') }}</span>
+                    </div>
+                    <!-- Врач -->
                     <div v-if="getAppointmentField('doctor')" class="confirmation-row">
                       <span class="confirmation-label">Врач</span>
                       <span class="confirmation-value">{{ getAppointmentField('doctor') }}</span>
@@ -1709,12 +1736,17 @@ onUnmounted(() => {
                       <span class="confirmation-label">Время</span>
                       <span class="confirmation-value">{{ getAppointmentField('time') }}</span>
                     </div>
+                    <!-- Клиника -->
+                    <div v-if="getAppointmentField('clinic')" class="confirmation-row">
+                      <span class="confirmation-label">Клиника</span>
+                      <span class="confirmation-value">{{ getAppointmentField('clinic') }}</span>
+                    </div>
                     <!-- Адрес -->
                     <div v-if="getAppointmentField('address')" class="confirmation-row">
                       <span class="confirmation-label">Адрес</span>
                       <span class="confirmation-value">{{ getAppointmentField('address') }}</span>
                     </div>
-                    <!-- Телефон -->
+                    <!-- Телефон клиники -->
                     <div v-if="getAppointmentField('phone')" class="confirmation-row">
                       <span class="confirmation-label">Телефон</span>
                       <span class="confirmation-value">{{ getAppointmentField('phone') }}</span>
@@ -1754,9 +1786,8 @@ onUnmounted(() => {
                     </router-link>
                   </div>
                 </div>
+                </div>
               </div>
-            </div>
-
             </div>
         </div>
 
