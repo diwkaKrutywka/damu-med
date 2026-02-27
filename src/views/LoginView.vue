@@ -1,7 +1,9 @@
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 
+const { t } = useI18n()
 const authStore = useAuthStore()
 
 const form = ref({
@@ -25,35 +27,35 @@ const handleSubmit = async () => {
     <div class="login-container">
       <div class="login-card card card-glow">
         <div class="login-header">
-          <h1 class="login-title">
-            <span class="text-gradient">MedContact</span>
+          <h1 class="login-title" contenteditable="false">
+            <span class="text-gradient">Demo Hub</span>
           </h1>
-          <p class="login-subtitle">Войдите в систему</p>
+          <p class="login-subtitle" contenteditable="false">{{ t('login.subtitle') }}</p>
         </div>
 
         <form class="login-form" @submit.prevent="handleSubmit">
           <div class="form-group">
-            <label class="form-label" for="username">Логин</label>
+            <label class="form-label" for="username">{{ t('login.loginLabel') }}</label>
             <input
               id="username"
               v-model="form.username"
               type="text"
               class="form-input"
-              placeholder="Введите логин"
+              :placeholder="t('login.loginPlaceholder')"
               required
               autocomplete="username"
             >
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="password">Пароль</label>
+            <label class="form-label" for="password">{{ t('login.passwordLabel') }}</label>
             <div class="password-wrapper">
               <input
                 id="password"
                 v-model="form.password"
                 :type="showPassword ? 'text' : 'password'"
                 class="form-input"
-                placeholder="Введите пароль"
+                :placeholder="t('login.passwordPlaceholder')"
                 required
                 autocomplete="current-password"
               >
@@ -84,7 +86,7 @@ const handleSubmit = async () => {
             :disabled="authStore.loading"
           >
             <span v-if="authStore.loading" class="loader"></span>
-            <span v-else>Войти</span>
+            <span v-else>{{ t('login.submit') }}</span>
           </button>
         </form>
       </div>

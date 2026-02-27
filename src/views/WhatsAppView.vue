@@ -1,8 +1,10 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useNotification } from '@/composables/useNotification'
 
 const { show } = useNotification()
+const { t } = useI18n()
 
 const messages = ref([])
 const inputText = ref('')
@@ -150,7 +152,7 @@ const processUserInput = async (text) => {
 
 const resetChat = async () => {
   messages.value = []
-  show('Диалог сброшен', 'success')
+  show(t('whatsapp.notifications.reset'), 'success')
   await startInitialScenario()
 }
 
@@ -173,20 +175,18 @@ onMounted(() => {
       <main class="whatsapp-demo">
         <!-- Info Panel -->
         <div class="info-panel animate-fadeInUp">
-          <h2>
-            <span style="color: #25D366;">WhatsApp</span> бот
+          <h2 contenteditable="false">
+            <span style="color: #25D366;">WhatsApp</span> {{ t('whatsapp.title').replace('WhatsApp ', '') }}
           </h2>
-          <p>
-            Генеративный чат-бот с базой знаний клиники. Напоминания, подтверждение, перенос записи. Интегрирован с DamuMed и МИС.
-          </p>
+          <p>{{ t('whatsapp.description') }}</p>
           <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: var(--spacing-sm);">
-            Попробуйте прямо здесь или напишите на WhatsApp
+            {{ t('whatsapp.tryHere') }}
           </p>
 
           <div class="qr-section">
             <div class="qr-code"></div>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: var(--spacing-md);">
-              Отсканируйте для начала диалога
+              {{ t('whatsapp.scanQR') }}
             </p>
             <div class="phone-number">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -196,12 +196,12 @@ onMounted(() => {
             </div>
             <div class="bot-status">
               <span class="status-dot" style="background: #25D366; width: 8px; height: 8px; border-radius: 50%;"></span>
-              <span>Бот онлайн</span>
+              <span>{{ t('whatsapp.botOnline') }}</span>
             </div>
           </div>
 
           <ul class="features-list">
-            <li v-for="feature in ['Отвечает по базе знаний клиники', 'Интеграция с DamuMed', 'Напоминания и подтверждение записи', 'Ответы на вопросы о подготовке', 'Работа с любой МИС']" :key="feature">
+            <li v-for="feature in t('whatsapp.features')" :key="feature">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
@@ -214,7 +214,7 @@ onMounted(() => {
               <path d="M1 4v6h6"/>
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
             </svg>
-            Сбросить диалог
+            {{ t('whatsapp.resetChat') }}
           </button>
         </div>
 
@@ -251,7 +251,7 @@ onMounted(() => {
             <!-- Chat Area -->
             <div class="wa-chat">
               <div class="wa-date-divider">
-                <span>Сегодня</span>
+                <span>{{ t('whatsapp.today') }}</span>
               </div>
 
               <div v-for="msg in messages" :key="msg.id" class="wa-message" :class="msg.sender === 'bot' ? 'incoming' : 'outgoing'">
@@ -289,7 +289,7 @@ onMounted(() => {
                 </svg>
               </div>
               <div class="wa-input-wrapper">
-                <input v-model="inputText" type="text" placeholder="Сообщение" @keypress.enter="sendMessage">
+                <input v-model="inputText" type="text" :placeholder="t('whatsapp.messagePlaceholder')" @keypress.enter="sendMessage">
               </div>
               <div class="wa-send-btn" @click="sendMessage">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

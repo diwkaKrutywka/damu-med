@@ -1,13 +1,18 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useNotification } from '@/composables/useNotification'
+import { useLanguage } from '@/composables/useLanguage'
 
 const { show } = useNotification()
+const { t } = useI18n()
+const { language } = useLanguage()
 
 // State
 const screen = ref('setup') // setup, realtime
 const sessionId = ref(null)
 const phone = ref('')
+const operatorPhone = ref('')
 const stage = ref('connecting') // connecting, active, doctors, calendar, faq, confirmation
 const showWaitingModal = ref(false)
 const isConnected = ref(false)
@@ -39,6 +44,7 @@ const doctorsList = ref([]) // Список врачей
 const availableSlots = ref([]) // Доступные временные слоты
 const appointmentData = ref(null) // Данные созданной записи
 const appointmentError = ref(false) // Ошибка создания записи
+const transferReason = ref('') // Причина перевода на оператора
 const functionLoading = ref(false) // Индикатор загрузки функции
 const slotsDate = ref(null) // Выбранная дата из API get_available_slots
 
@@ -69,7 +75,6 @@ const knowledgeBase = {
   prepare: { title: 'Подготовка к приёму', full: 'Приходите за 10-15 минут до назначенного времени.', short: 'Приходите за 10-15 минут' }
 }
 
-const kbTopics = Object.entries(knowledgeBase).map(([id, data]) => ({ id, title: data.title }))
 
 // Demo Scenario
 const demoScenario = [
@@ -133,6 +138,16 @@ const formatPhoneInput = (e) => {
   phone.value = formatted
 }
 
+const formatOperatorPhoneInput = (e) => {
+  let digits = e.target.value.replace(/\D/g, '').substring(0, 10)
+  let formatted = ''
+  if (digits.length > 0) formatted = digits.substring(0, 3)
+  if (digits.length > 3) formatted += ' ' + digits.substring(3, 6)
+  if (digits.length > 6) formatted += ' ' + digits.substring(6, 8)
+  if (digits.length > 8) formatted += ' ' + digits.substring(8, 10)
+  operatorPhone.value = formatted
+}
+
 const generateSessionId = () => {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
   return Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
@@ -141,7 +156,7 @@ const generateSessionId = () => {
 const openSession = () => {
   const phoneDigits = phone.value.replace(/\s/g, '')
   if (phoneDigits.length < 10) {
-    show('Введите корректный номер телефона', 'error')
+    show(t('voiceRobot.notifications.invalidPhone'), 'error')
     return
   }
 
@@ -149,16 +164,33 @@ const openSession = () => {
   showWaitingModal.value = true
 
   // Подключение к WebSocket
-  const wsUrl = `wss://genai.bpcontact.kz/api/v1/genai/ws/session_${sessionId.value}?x-customer-code=demo`
+  const wsUrl = `ws://78.40.109.44:8000/ws/front/${sessionId.value}`
   websocket = new WebSocket(wsUrl)
 
-  websocket.onopen = async () => {
+  websocket.onopen = () => {
     console.log('WebSocket подключен')
     addLog('system', '🔌 WebSocket подключен')
-    showWaitingModal.value = false
-    isConnected.value = true
-    startRealtimeDemo()
-    await startMicrophone()
+    // Отправляем номер телефона для регистрации
+    const phoneNumber = '+7' + phoneDigits
+    websocket.send(JSON.stringify({
+      type: 'register_phone_number',
+      phone_number: phoneNumber
+    }))
+    addLog('system', `📱 Отправлен номер: ${phoneNumber}`)
+    websocket.send(JSON.stringify({
+      type: 'register_language_code',
+      language_code: language.value
+    }))
+    addLog('system', `🌐 Отправлен язык: ${language.value}`)
+    const operatorDigits = operatorPhone.value.replace(/\s/g, '')
+    if (operatorDigits.length === 10) {
+      const operatorNumber = '+7' + operatorDigits
+      websocket.send(JSON.stringify({
+        type: 'register_operator_phone_number',
+        phone_number: operatorNumber
+      }))
+      addLog('system', `📱 Отправлен номер оператора: ${operatorNumber}`)
+    }
   }
 
   websocket.onmessage = (event) => {
@@ -178,7 +210,8 @@ const openSession = () => {
   websocket.onerror = (error) => {
     console.error('WebSocket ошибка:', error)
     addLog('system', '❌ Ошибка подключения')
-    show('Ошибка подключения к серверу', 'error')
+    show(t('voiceRobot.notifications.connectionError'), 'error')
+    showWaitingModal.value = false
   }
 
   websocket.onclose = () => {
@@ -361,24 +394,15 @@ const processFunctionData = (func, botText = null) => {
         console.log('=== PROCESSING SLOTS ===')
         stage.value = 'calendar'
 
-        // Дату берём из аргументов функции
-        slotsDate.value = parsedArgs.schedule_date || parsedArgs.date || null
-        console.log('slotsDate from args:', slotsDate.value)
-
-        // Пробуем получить слоты из результата
-        let slotsData = parsedResult
-        if (parsedResult && !Array.isArray(parsedResult)) {
-          slotsData = parsedResult.data || parsedResult.result || parsedResult.slots || [parsedResult]
-        }
-
-        console.log('slotsData:', slotsData)
-        console.log('botText:', botText)
+        // Дату берём из аргументов функции (fallback)
+        const argsDate = parsedArgs.schedule_date || parsedArgs.date || null
 
         const allSlots = []
 
-        // Если есть структурированные данные слотов
-        if (Array.isArray(slotsData) && slotsData.length > 0) {
-          slotsData.forEach(item => {
+        if (Array.isArray(parsedResult)) {
+          // Массив объектов-расписаний [{doctor_id, date, slots: [...]}, ...]
+          slotsDate.value = parsedResult[0]?.date || parsedResult[0]?.schedule_date || argsDate
+          parsedResult.forEach(item => {
             if (item.slots && Array.isArray(item.slots)) {
               item.slots.forEach(slot => {
                 if (slot.is_available) {
@@ -391,7 +415,27 @@ const processFunctionData = (func, botText = null) => {
               })
             }
           })
+        } else if (parsedResult && typeof parsedResult === 'object') {
+          // Один объект: {doctor_id, date, clinic_id, slots: [...]}
+          slotsDate.value = parsedResult.date || parsedResult.schedule_date || argsDate
+          const flatSlots = parsedResult.slots || parsedResult.data || parsedResult.result || []
+          if (Array.isArray(flatSlots)) {
+            flatSlots.forEach(slot => {
+              if (slot.is_available) {
+                allSlots.push({
+                  ...slot,
+                  doctor_id: parsedResult.doctor_id,
+                  date: slotsDate.value
+                })
+              }
+            })
+          }
+        } else {
+          slotsDate.value = argsDate
         }
+
+        console.log('slotsDate from args/result:', slotsDate.value)
+        console.log('botText:', botText)
 
         // Если слотов нет из результата, парсим из текста бота
         if (allSlots.length === 0 && botText) {
@@ -466,11 +510,36 @@ const handleWebSocketMessage = (data) => {
   }
 
   switch (data.type) {
+    // Статус-лог (ответ на register_phone_number и др.)
+    case 'status_log':
+      addLog('system', data.message)
+      break
+
+    // Звонок поступает (идут гудки)
+    case 'call_ringing':
+      addLog('system', `📞 Звонок: ${data.caller_number} → ${data.did_number}`)
+      break
+
+    // Звонок начался — открываем сессию
+    case 'call_started':
+      addLog('system', '🤖 ' + (data.message || 'Звонок активен'))
+      showWaitingModal.value = false
+      isConnected.value = true
+      startRealtimeDemo()
+      startMicrophone()
+      break
+
+    // Звонок завершён
+    case 'call_ended':
+      addLog('system', '📞 ' + (data.message || 'Звонок завершён'))
+      stopTimer()
+      isConnected.value = false
+      stopMicrophone()
+      break
+
     // Логи для нижней панели
     case 'log':
       addLog('system', data.message)
-      // Просто логируем, не отправляем audio_ended автоматически
-      // Сервер сам управляет жизненным циклом соединения
       break
 
     // Индикатор печати
@@ -573,6 +642,10 @@ const handleWebSocketMessage = (data) => {
             stage.value = 'booking'
             appointmentData.value = null
             break
+          case 'transfer_for_operator':
+            stage.value = 'transfer'
+            transferReason.value = parsedArgs.reason || ''
+            break
         }
       }
       break
@@ -626,49 +699,49 @@ const handleWebSocketMessage = (data) => {
               // Не перезаписываем confirmation
               if (stage.value === 'confirmation') break
 
-              console.log('=== PROCESSING get_available_slots ===')
+              console.log('=== PROCESSING get_available_slots/get_doctor_schedule ===')
               stage.value = 'calendar'
 
-              console.log('parsedResult:', parsedResult)
-              console.log('parsedResult type:', typeof parsedResult)
-              console.log('is Array:', Array.isArray(parsedResult))
-              // Результат может быть массивом или объектом с вложенным массивом
-              let slotsData = parsedResult
-              // Если результат обёрнут в объект
-              if (parsedResult && !Array.isArray(parsedResult)) {
-                slotsData = parsedResult.data || parsedResult.result || parsedResult.slots || [parsedResult]
-              }
+              const allSlots = []
 
-              if (Array.isArray(slotsData) && slotsData.length > 0) {
-                // Сохраняем дату из ответа
-                slotsDate.value = slotsData[0].date || slotsData[0].schedule_date || null
-                console.log('slotsDate set to:', slotsDate.value)
-
-                // Собираем только СВОБОДНЫЕ слоты (is_available: true)
-                const allSlots = []
-                slotsData.forEach(item => {
+              if (Array.isArray(parsedResult)) {
+                // Массив объектов-расписаний [{doctor_id, date, slots: [...]}, ...]
+                slotsDate.value = parsedResult[0]?.date || parsedResult[0]?.schedule_date || null
+                parsedResult.forEach(item => {
                   if (item.slots && Array.isArray(item.slots)) {
                     item.slots.forEach(slot => {
-                      // Фильтруем - только доступные слоты
                       if (slot.is_available) {
                         allSlots.push({
                           ...slot,
                           doctor_id: item.doctor_id,
-                          date: item.date || item.schedule_date
+                          date: item.date || item.schedule_date || slotsDate.value
                         })
                       }
                     })
                   }
                 })
-                availableSlots.value = allSlots
-                console.log('availableSlots set to:', allSlots)
-                console.log('FINAL slotsDate.value:', slotsDate.value)
-                console.log('FINAL availableSlots.value:', availableSlots.value)
+              } else if (parsedResult && typeof parsedResult === 'object') {
+                // Один объект: {doctor_id, date, clinic_id, slots: [...]}
+                slotsDate.value = parsedResult.date || parsedResult.schedule_date || null
+                const flatSlots = parsedResult.slots || parsedResult.data || parsedResult.result || []
+                if (Array.isArray(flatSlots)) {
+                  flatSlots.forEach(slot => {
+                    if (slot.is_available) {
+                      allSlots.push({
+                        ...slot,
+                        doctor_id: parsedResult.doctor_id,
+                        date: slotsDate.value
+                      })
+                    }
+                  })
+                }
               } else {
-                availableSlots.value = []
                 slotsDate.value = null
-                console.log('No slots data found in result - slotsData was:', slotsData)
               }
+
+              availableSlots.value = allSlots
+              console.log('FINAL slotsDate.value:', slotsDate.value)
+              console.log('FINAL availableSlots.value:', availableSlots.value)
             }
             break
           case 'create_appointment':
@@ -703,10 +776,15 @@ const handleWebSocketMessage = (data) => {
             console.log('appointmentData.value is now:', appointmentData.value)
             console.log('appointmentError.value is now:', appointmentError.value)
             break
+          case 'transfer_for_operator':
+            currentFunction.value = null
+            functionLoading.value = false
+            addLog('system', '🔀 Перевод на оператора выполнен')
+            break
         }
 
-        // Автоматически скрываем карточку функции через 3 секунды (кроме confirmation)
-        if (data.function.name !== 'create_appointment' && data.function.name !== 'book_appointment') {
+        // Автоматически скрываем карточку функции через 3 секунды (кроме confirmation и transfer)
+        if (data.function.name !== 'create_appointment' && data.function.name !== 'book_appointment' && data.function.name !== 'transfer_for_operator') {
           setTimeout(() => {
             if (currentFunction.value && currentFunction.value.name === data.function.name) {
               currentFunction.value = null
@@ -1036,6 +1114,7 @@ const resetDemo = () => {
   screen.value = 'setup'
   sessionId.value = null
   phone.value = ''
+  operatorPhone.value = ''
   stage.value = 'connecting'
   isConnected.value = false
   callTime.value = 0
@@ -1060,6 +1139,7 @@ const resetDemo = () => {
   availableSlots.value = []
   appointmentData.value = null
   appointmentError.value = false
+  transferReason.value = ''
   functionLoading.value = false
   slotsDate.value = null
 
@@ -1079,7 +1159,8 @@ const stageName = computed(() => {
     calendar: 'Выбираем время',
     faq: 'Отвечаю на вопрос',
     booking: 'Создаём запись',
-    confirmation: 'Записано!'
+    confirmation: 'Записано!',
+    transfer: 'Перевод на оператора'
   }
   return names[stage.value] || stage.value
 })
@@ -1219,11 +1300,8 @@ onUnmounted(() => {
               <line x1="8" y1="23" x2="16" y2="23"/>
             </svg>
           </div>
-          <h1>Робот записывает пациентов за вас</h1>
-          <p class="setup-description">
-            Пациент звонит — робот отвечает как живой оператор.
-            Записывает на приём, отвечает на вопросы. Работает круглосуточно.
-          </p>
+          <h1 contenteditable="false">{{ t('voiceRobot.setup.title') }}</h1>
+          <p class="setup-description" contenteditable="false">{{ t('voiceRobot.setup.description') }}</p>
 
           <div class="setup-features">
             <div class="setup-feature">
@@ -1231,29 +1309,36 @@ onUnmounted(() => {
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
                 <polyline points="22 4 12 14.01 9 11.01"/>
               </svg>
-              <span>Понимает речь</span>
+              <span>{{ t('voiceRobot.setup.features.speech') }}</span>
             </div>
             <div class="setup-feature">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
                 <polyline points="12 6 12 12 16 14"/>
               </svg>
-              <span>Работает 24/7</span>
+              <span>{{ t('voiceRobot.setup.features.always') }}</span>
             </div>
             <div class="setup-feature">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
               </svg>
-              <span>Сразу в расписание</span>
+              <span>{{ t('voiceRobot.setup.features.schedule') }}</span>
             </div>
           </div>
 
           <div class="demo-flow">
-            <p class="flow-label">Введите номер, с которого будете звонить:</p>
+            <p class="flow-label" contenteditable="false">{{ t('voiceRobot.setup.phoneLabel') }}</p>
             <div class="phone-input-group">
               <div class="phone-input">
                 <span class="phone-prefix">+7</span>
                 <input type="tel" :value="phone" @input="formatPhoneInput" placeholder="XXX XXX XX XX" maxlength="13">
+              </div>
+            </div>
+            <p class="flow-label" contenteditable="false" style="margin-top: 12px;">{{ t('voiceRobot.setup.operatorLabel') }}</p>
+            <div class="phone-input-group">
+              <div class="phone-input">
+                <span class="phone-prefix">+7</span>
+                <input type="tel" :value="operatorPhone" @input="formatOperatorPhoneInput" placeholder="XXX XXX XX XX" maxlength="13">
               </div>
             </div>
             <button class="btn btn-primary btn-lg btn-glow" @click="openSession">
@@ -1261,16 +1346,16 @@ onUnmounted(() => {
                 <circle cx="12" cy="12" r="10"/>
                 <polygon points="10 8 16 12 10 16 10 8"/>
               </svg>
-              Открыть сессию
+              {{ t('voiceRobot.setup.openSession') }}
             </button>
           </div>
         </div>
 
         <div class="setup-preview">
           <div class="preview-badge">
-            <span class="badge badge-cyan">Интерактивное демо</span>
+            <span class="badge badge-cyan">{{ t('voiceRobot.setup.interactiveDemo') }}</span>
           </div>
-          <p>Позвоните — и услышите робота вживую. На экране увидите, как он думает, ищет в базе знаний и записывает в МИС.</p>
+          <p>{{ t('voiceRobot.setup.demoDesc') }}</p>
         </div>
       </div>
     </div>
@@ -1279,16 +1364,16 @@ onUnmounted(() => {
     <div v-else class="realtime-screen">
       <div class="controls-bar">
         <div class="controls-left">
-          <h2 class="session-title">
+          <h2 class="session-title" contenteditable="false">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
               <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
             </svg>
-            Сессия: <span class="text-gradient">{{ sessionId }}</span>
+            {{ t('voiceRobot.realtime.sessionTitle') }} <span class="text-gradient">{{ sessionId }}</span>
           </h2>
           <div class="connection-status">
             <span class="connection-dot" :class="{ connected: isConnected }"></span>
-            <span>{{ isConnected ? 'Подключено' : 'Подключение...' }}</span>
+            <span>{{ isConnected ? t('voiceRobot.realtime.connected') : t('voiceRobot.realtime.connecting') }}</span>
           </div>
           <div class="call-timer">{{ formattedTime }}</div>
         </div>
@@ -1298,7 +1383,7 @@ onUnmounted(() => {
               <path d="M1 4v6h6"/>
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
             </svg>
-            Сбросить
+            {{ t('voiceRobot.realtime.reset') }}
           </button>
         </div>
       </div>
@@ -1312,7 +1397,7 @@ onUnmounted(() => {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                 </svg>
-                Транскрипция диалога
+                {{ t('voiceRobot.realtime.transcriptTitle') }}
               </div>
               <div class="audio-visualizer" :class="{ active: isConnected && stage !== 'confirmation' }">
                 <div class="bar"></div>
@@ -1328,7 +1413,7 @@ onUnmounted(() => {
                 <div class="typing-indicator">
                   <span></span><span></span><span></span>
                 </div>
-                <p>Ожидание подключения к сессии...</p>
+                <p>{{ t('voiceRobot.realtime.waitingConnection') }}</p>
               </div>
               <div v-for="msg in messages" :key="msg.id" class="message" :class="[msg.sender, { 'typing-message': msg.isTyping }]">
                 <div class="message-avatar" :class="msg.sender">
@@ -1341,7 +1426,7 @@ onUnmounted(() => {
                   </svg>
                 </div>
                 <div class="message-content">
-                  <div class="message-sender">{{ msg.sender === 'robot' ? 'Асель (AI)' : 'Пациент' }}</div>
+                  <div class="message-sender">{{ msg.sender === 'robot' ? t('voiceRobot.realtime.senderRobot') : t('voiceRobot.realtime.senderPatient') }}</div>
                   <div class="message-text">{{ msg.text }}<span v-if="msg.isTyping" class="typing-cursor">|</span></div>
                   <div class="message-time">{{ msg.time }}</div>
                 </div>
@@ -1356,7 +1441,7 @@ onUnmounted(() => {
                   </svg>
                 </div>
                 <div class="message-content">
-                  <div class="message-sender">Пациент</div>
+                  <div class="message-sender">{{ t('voiceRobot.realtime.senderPatient') }}</div>
                   <div class="message-text">{{ partialUserText }}<span class="typing-cursor">|</span></div>
                 </div>
               </div>
@@ -1369,7 +1454,7 @@ onUnmounted(() => {
                   </svg>
                 </div>
                 <div class="message-content">
-                  <div class="message-sender">Асель (AI)</div>
+                  <div class="message-sender">{{ t('voiceRobot.realtime.senderRobot') }}</div>
                   <div class="message-text">
                     <span class="typing-dots"><span></span><span></span><span></span></span>
                   </div>
@@ -1387,7 +1472,7 @@ onUnmounted(() => {
                   <circle cx="8.5" cy="8.5" r="1.5"/>
                   <polyline points="21 15 16 10 5 21"/>
                 </svg>
-                Визуализация
+                {{ t('voiceRobot.realtime.visualTitle') }}
               </div>
               <span class="badge badge-cyan">{{ stageName }}</span>
             </div>
@@ -1402,7 +1487,7 @@ onUnmounted(() => {
                       <path d="M12 6v6l4 2"/>
                     </svg>
                   </div>
-                  <div class="ai-thinking-text">AI думает...</div>
+                  <div class="ai-thinking-text">{{ t('voiceRobot.realtime.aiThinking') }}</div>
                   <div class="ai-thinking-function">{{ currentFunction.name.replace(/_/g, ' ') }}</div>
                   <div class="ai-thinking-dots">
                     <span></span><span></span><span></span>
@@ -1422,15 +1507,15 @@ onUnmounted(() => {
                     </svg>
                   </div>
                 </div>
-                <h3>Соединяем...</h3>
-                <p class="text-secondary">Робот берёт трубку</p>
+                <h3 contenteditable="false">{{ t('voiceRobot.realtime.connecting') }}</h3>
+                <p class="text-secondary" contenteditable="false">{{ t('voiceRobot.realtime.robotAnswering') }}</p>
               </div>
 
               <!-- Active Call -->
               <div v-else-if="stage === 'active'" class="visual-stage-content">
                 <div class="active-call-visual">
                   <div class="waveform-container">
-                    <div class="waveform-label">AI Робот</div>
+                    <div class="waveform-label">{{ t('voiceRobot.realtime.aiRobot') }}</div>
                     <div class="waveform active">
                       <div class="wave-bar" v-for="i in 8" :key="i"></div>
                     </div>
@@ -1442,34 +1527,34 @@ onUnmounted(() => {
                     </svg>
                   </div>
                   <div class="waveform-container">
-                    <div class="waveform-label">Пациент</div>
+                    <div class="waveform-label">{{ t('voiceRobot.realtime.senderPatient') }}</div>
                     <div class="waveform user-waveform">
                       <div class="wave-bar" v-for="i in 8" :key="i"></div>
                     </div>
                   </div>
                 </div>
                 <div v-if="currentIntent" class="current-intent">
-                  <span class="intent-label">Робот понял:</span>
+                  <span class="intent-label">{{ t('voiceRobot.realtime.understood') }}</span>
                   <span class="intent-value">{{ currentIntent }}</span>
                 </div>
               </div>
 
               <!-- Specialties -->
               <div v-else-if="stage === 'specialties'" class="visual-stage-content">
-                <h4 class="stage-title">
+                <h4 class="stage-title" contenteditable="false">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
                   </svg>
-                  Специальности врачей
+                  {{ t('voiceRobot.realtime.specialtiesTitle') }}
                 </h4>
 
                 <div v-if="functionLoading" class="loading-indicator">
                   <div class="loading-spinner"></div>
-                  <span>Загрузка специальностей...</span>
+                  <span>{{ t('voiceRobot.realtime.loadingSpecialties') }}</span>
                 </div>
 
                 <div v-else-if="specialtiesList.length > 0" class="specialties-list">
-                  <div class="specialties-count">Найдено: {{ specialtiesList.length }} специальностей</div>
+                  <div class="specialties-count">{{ t('voiceRobot.realtime.foundCount', { n: specialtiesList.length }) }} {{ t('voiceRobot.realtime.specialtiesTitle').toLowerCase() }}</div>
                   <div class="specialties-grid">
                     <div v-for="spec in specialtiesList.slice(0, 12)" :key="spec.id" class="specialty-card" style="min-height: 150px;">
                       <div class="specialty-name">{{ spec.name }}</div>
@@ -1479,39 +1564,39 @@ onUnmounted(() => {
                           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                           <circle cx="9" cy="7" r="4"/>
                         </svg>
-                        {{ spec.doctor_count }} врачей
+                        {{ spec.doctor_count }} {{ t('voiceRobot.realtime.doctors') }}
                       </div>
                     </div>
                   </div>
                   <div v-if="specialtiesList.length > 12" class="specialties-more">
-                    ... и ещё {{ specialtiesList.length - 12 }} специальностей
+                    {{ t('voiceRobot.realtime.specialtiesMore', { n: specialtiesList.length - 12 }) }}
                   </div>
                 </div>
 
                 <div v-else class="empty-state">
-                  <p>Специальности не найдены</p>
+                  <p>{{ t('voiceRobot.realtime.noSpecialties') }}</p>
                 </div>
               </div>
 
               <!-- Doctors -->
               <div v-else-if="stage === 'doctors'" class="visual-stage-content">
-                <h4 class="stage-title">
+                <h4 class="stage-title" contenteditable="false">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                     <circle cx="9" cy="7" r="4"/>
                     <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
                     <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                   </svg>
-                  Доступные врачи
+                  {{ t('voiceRobot.realtime.doctorsTitle') }}
                 </h4>
 
                 <div v-if="functionLoading" class="loading-indicator">
                   <div class="loading-spinner"></div>
-                  <span>Загрузка врачей...</span>
+                  <span>{{ t('voiceRobot.realtime.loadingDoctors') }}</span>
                 </div>
 
                 <div v-else-if="doctorsList.length > 0" class="doctors-list-api">
-                  <div class="doctors-count">Найдено: {{ doctorsList.length }} врачей</div>
+                  <div class="doctors-count">{{ t('voiceRobot.realtime.foundDoctors', { n: doctorsList.length }) }}</div>
                   <div class="doctors-grid">
                     <div v-for="doc in doctorsList.slice(0, 8)" :key="doc.id" class="doctor-card" :class="{ selected: selectedDoctor?.id === doc.id }">
                       <div class="doctor-avatar">{{ getInitials(doc.name || doc.full_name) }}</div>
@@ -1526,7 +1611,7 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <div v-if="doctorsList.length > 8" class="doctors-more">
-                    ... и ещё {{ doctorsList.length - 8 }} врачей
+                    {{ t('voiceRobot.realtime.doctorsMore', { n: doctorsList.length - 8 }) }}
                   </div>
                 </div>
 
@@ -1552,27 +1637,27 @@ onUnmounted(() => {
                   <div class="booking-icon">
                     <div class="loading-spinner large"></div>
                   </div>
-                  <h3>Создаём запись...</h3>
-                  <p class="text-secondary">Отправка данных в МИС</p>
+                  <h3 contenteditable="false">{{ t('voiceRobot.realtime.bookingTitle') }}</h3>
+                  <p class="text-secondary" contenteditable="false">{{ t('voiceRobot.realtime.bookingSubtitle') }}</p>
                 </div>
               </div>
 
               <!-- Calendar -->
               <div v-else-if="stage === 'calendar'" class="visual-stage-content">
-                <h4 class="stage-title">
+                <h4 class="stage-title" contenteditable="false">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
                     <line x1="16" y1="2" x2="16" y2="6"/>
                     <line x1="8" y1="2" x2="8" y2="6"/>
                     <line x1="3" y1="10" x2="21" y2="10"/>
                   </svg>
-                  Выбор даты и времени
+                  {{ t('voiceRobot.realtime.calendarTitle') }}
                 </h4>
 
                 <!-- Загрузка -->
                 <div v-if="functionLoading" class="loading-indicator">
                   <div class="loading-spinner"></div>
-                  <span>Загрузка расписания...</span>
+                  <span>{{ t('voiceRobot.realtime.loadingSchedule') }}</span>
                 </div>
 
                 <!-- Данные из API: выбранная дата и свободные слоты -->
@@ -1587,13 +1672,13 @@ onUnmounted(() => {
                       </svg>
                     </div>
                     <div class="selected-date-info">
-                      <div class="selected-date-label">Выбранная дата:</div>
+                      <div class="selected-date-label">{{ t('voiceRobot.realtime.selectedDate') }}</div>
                       <div class="selected-date-value">{{ formatAppointmentDate(slotsDate) }}</div>
                     </div>
                   </div>
 
                   <div class="time-slots">
-                    <div class="time-slots-title">Свободные окна ({{ availableSlots.length }}):</div>
+                    <div class="time-slots-title" contenteditable="false">{{ t('voiceRobot.realtime.freeSlots', { n: availableSlots.length }) }}</div>
                     <div class="time-slots-grid">
                       <button
                         v-for="(slot, idx) in availableSlots"
@@ -1609,56 +1694,109 @@ onUnmounted(() => {
 
                 <!-- Нет свободных слотов -->
                 <div v-else-if="slotsDate && availableSlots.length === 0" class="empty-state">
-                  <p>На {{ formatAppointmentDate(slotsDate) }} нет свободных окон</p>
+                  <p>{{ t('voiceRobot.realtime.noSlots', { date: formatAppointmentDate(slotsDate) }) }}</p>
                 </div>
 
                 <!-- Ожидание данных о дате -->
                 <div v-else class="empty-state">
-                  <p>Ожидание выбора даты...</p>
+                  <p>{{ t('voiceRobot.realtime.waitingDate') }}</p>
                 </div>
               </div>
 
               <!-- FAQ / Knowledge Base -->
               <div v-else-if="stage === 'faq'" class="visual-stage-content">
-                <h4 class="stage-title">
+                <h4 class="stage-title" contenteditable="false">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
                     <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
                   </svg>
-                  База знаний робота
+                  {{ t('voiceRobot.realtime.kbTitle') }}
                 </h4>
 
                 <div class="kb-query">
-                  <div class="kb-query-label">Вопрос пациента:</div>
+                  <div class="kb-query-label">{{ t('voiceRobot.realtime.patientQuestion') }}</div>
                   <div class="kb-query-text">"{{ kbQuery || '—' }}"</div>
                 </div>
 
                 <div v-if="!kbResult" class="kb-search">
                   <div class="kb-search-indicator">
                     <div class="kb-search-dot"></div>
-                    <span>Поиск в базе знаний...</span>
+                    <span>{{ t('voiceRobot.realtime.kbSearching') }}</span>
                   </div>
                 </div>
 
                 <div v-else class="kb-result">
                   <div class="kb-result-header">
                     <span class="kb-result-icon">📄</span>
-                    <span class="kb-result-title">{{ kbResult.title }}</span>
-                    <span class="kb-result-score">{{ (0.85 + Math.random() * 0.14).toFixed(2) }} релевантность</span>
+                    <span class="kb-result-title" contenteditable="false">{{ kbResult.title }}</span>
+                    <span class="kb-result-score">{{ (0.85 + Math.random() * 0.14).toFixed(2) }} {{ t('voiceRobot.realtime.relevance') }}</span>
                   </div>
                   <div class="kb-result-full">{{ kbResult.full }}</div>
                   <div class="kb-result-answer">
-                    <div class="kb-answer-label">Ответ робота (кратко):</div>
+                    <div class="kb-answer-label">{{ t('voiceRobot.realtime.robotAnswer') }}</div>
                     <div class="kb-answer-text">{{ kbResult.short }}</div>
                   </div>
                 </div>
 
                 <div class="kb-bank">
-                  <div class="kb-bank-title">Темы в базе:</div>
+                  <div class="kb-bank-title" contenteditable="false">{{ t('voiceRobot.realtime.kbTopics') }}</div>
                   <div class="kb-bank-items">
                     <div v-for="topic in kbTopics" :key="topic.id" class="kb-bank-item" :class="{ active: activeKbTopic === topic.id }">
                       {{ topic.title }}
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Transfer to Operator -->
+              <div v-else-if="stage === 'transfer'" class="visual-stage-content">
+                <div class="transfer-card">
+                  <div class="transfer-handoff">
+                    <div class="transfer-node robot-node">
+                      <div class="transfer-avatar robot-avatar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                          <line x1="12" y1="19" x2="12" y2="23"/>
+                          <line x1="8" y1="23" x2="16" y2="23"/>
+                        </svg>
+                      </div>
+                      <div class="transfer-node-label">{{ t('voiceRobot.realtime.aiAssel') }}</div>
+                    </div>
+
+                    <div class="transfer-arrow-block">
+                      <div class="transfer-arrow-line">
+                        <div class="transfer-dot dot-1"></div>
+                        <div class="transfer-dot dot-2"></div>
+                        <div class="transfer-dot dot-3"></div>
+                      </div>
+                      <svg class="transfer-arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                        <polyline points="12 5 19 12 12 19"/>
+                      </svg>
+                    </div>
+
+                    <div class="transfer-node operator-node">
+                      <div class="transfer-avatar operator-avatar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                          <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                      </div>
+                      <div class="transfer-node-label">{{ t('voiceRobot.realtime.operator') }}</div>
+                    </div>
+                  </div>
+
+                  <div class="transfer-status">
+                    <div class="transfer-status-badge">
+                      <span class="transfer-status-dot"></span>
+                      {{ t('voiceRobot.realtime.connectingOperator') }}
+                    </div>
+                  </div>
+
+                  <div v-if="transferReason" class="transfer-reason">
+                    <div class="transfer-reason-label">{{ t('voiceRobot.realtime.transferReason') }}</div>
+                    <div class="transfer-reason-text">{{ transferReason }}</div>
                   </div>
                 </div>
               </div>
@@ -1674,8 +1812,8 @@ onUnmounted(() => {
                       <line x1="9" y1="9" x2="15" y2="15"/>
                     </svg>
                   </div>
-                  <h3>Упс! Не удалось создать запись</h3>
-                  <p class="text-secondary">Произошла ошибка при создании записи. Попробуйте ещё раз или обратитесь к администратору.</p>
+                  <h3 contenteditable="false">{{ t('voiceRobot.realtime.errorTitle') }}</h3>
+                  <p class="text-secondary" contenteditable="false">{{ t('voiceRobot.realtime.errorDesc') }}</p>
 
                   <div class="confirmation-actions">
                     <button class="btn btn-primary btn-sm" @click="stage = 'active'; appointmentError = false">
@@ -1683,13 +1821,13 @@ onUnmounted(() => {
                         <path d="M1 4v6h6"/>
                         <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
                       </svg>
-                      Попробовать снова
+                      {{ t('voiceRobot.realtime.retryBtn') }}
                     </button>
                     <router-link to="/" class="btn btn-secondary btn-sm">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M19 12H5M12 19l-7-7 7-7"/>
                       </svg>
-                      К стендам
+                      {{ t('voiceRobot.realtime.backToStands') }}
                     </router-link>
                   </div>
                 </div>
@@ -1701,54 +1839,54 @@ onUnmounted(() => {
                       <polyline points="20 6 9 17 4 12"/>
                     </svg>
                   </div>
-                  <h3>Запись подтверждена!</h3>
-                  <p class="text-secondary">Данные отправлены в МИС</p>
+                  <h3 contenteditable="false">{{ t('voiceRobot.realtime.successTitle') }}</h3>
+                  <p class="text-secondary" contenteditable="false">{{ t('voiceRobot.realtime.successSubtitle') }}</p>
 
                   <!-- Данные из API -->
                   <div v-if="appointmentData" class="confirmation-details">
                     <!-- Код записи -->
                     <div v-if="getAppointmentField('code')" class="confirmation-row">
-                      <span class="confirmation-label">Код записи</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmCode') }}</span>
                       <span class="confirmation-value confirmation-code">{{ getAppointmentField('code') }}</span>
                     </div>
                     <!-- Пациент -->
                     <div v-if="getAppointmentField('patient')" class="confirmation-row">
-                      <span class="confirmation-label">Пациент</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmPatient') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('patient') }}</span>
                     </div>
                     <!-- Врач -->
                     <div v-if="getAppointmentField('doctor')" class="confirmation-row">
-                      <span class="confirmation-label">Врач</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmDoctor') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('doctor') }}</span>
                     </div>
                     <!-- Специальность -->
                     <div v-if="getAppointmentField('specialty')" class="confirmation-row">
-                      <span class="confirmation-label">Специальность</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmSpecialty') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('specialty') }}</span>
                     </div>
                     <!-- Дата -->
                     <div v-if="getAppointmentField('date')" class="confirmation-row">
-                      <span class="confirmation-label">Дата</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmDate') }}</span>
                       <span class="confirmation-value">{{ formatAppointmentDate(getAppointmentField('date')) }}</span>
                     </div>
                     <!-- Время -->
                     <div v-if="getAppointmentField('time')" class="confirmation-row">
-                      <span class="confirmation-label">Время</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmTime') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('time') }}</span>
                     </div>
                     <!-- Клиника -->
                     <div v-if="getAppointmentField('clinic')" class="confirmation-row">
-                      <span class="confirmation-label">Клиника</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmClinic') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('clinic') }}</span>
                     </div>
                     <!-- Адрес -->
                     <div v-if="getAppointmentField('address')" class="confirmation-row">
-                      <span class="confirmation-label">Адрес</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmAddress') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('address') }}</span>
                     </div>
                     <!-- Телефон клиники -->
                     <div v-if="getAppointmentField('phone')" class="confirmation-row">
-                      <span class="confirmation-label">Телефон</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmPhone') }}</span>
                       <span class="confirmation-value">{{ getAppointmentField('phone') }}</span>
                     </div>
                   </div>
@@ -1756,23 +1894,23 @@ onUnmounted(() => {
                   <!-- Fallback: данные из локального состояния -->
                   <div v-else-if="selectedDoctor && selectedDate" class="confirmation-details">
                     <div class="confirmation-row">
-                      <span class="confirmation-label">Врач</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmDoctor') }}</span>
                       <span class="confirmation-value">{{ selectedDoctor.name }}</span>
                     </div>
                     <div class="confirmation-row">
-                      <span class="confirmation-label">Специальность</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmSpecialty') }}</span>
                       <span class="confirmation-value">{{ selectedDoctor.specialty }}</span>
                     </div>
                     <div class="confirmation-row">
-                      <span class="confirmation-label">Дата</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmDate') }}</span>
                       <span class="confirmation-value">{{ selectedDate.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }) }}</span>
                     </div>
                     <div class="confirmation-row">
-                      <span class="confirmation-label">Время</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmTime') }}</span>
                       <span class="confirmation-value">{{ selectedTime }}</span>
                     </div>
                     <div class="confirmation-row">
-                      <span class="confirmation-label">Адрес</span>
+                      <span class="confirmation-label">{{ t('voiceRobot.realtime.confirmAddress') }}</span>
                       <span class="confirmation-value">ул. Абая 52, каб. 305</span>
                     </div>
                   </div>
@@ -1782,7 +1920,7 @@ onUnmounted(() => {
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M19 12H5M12 19l-7-7 7-7"/>
                       </svg>
-                      К стендам
+                      {{ t('voiceRobot.realtime.backToStands') }}
                     </router-link>
                   </div>
                 </div>
@@ -1794,23 +1932,23 @@ onUnmounted(() => {
         <!-- AI Logs - Bottom Panel -->
         <div class="ai-logs-panel">
           <div class="ai-logs-header">
-            <div class="ai-logs-title">
+            <div class="ai-logs-title" contenteditable="false">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                 <polyline points="14 2 14 8 20 8"/>
                 <line x1="16" y1="13" x2="8" y2="13"/>
                 <line x1="16" y1="17" x2="8" y2="17"/>
               </svg>
-              <span>Системные логи</span>
+              <span>{{ t('voiceRobot.realtime.logsTitle') }}</span>
             </div>
             <div class="ai-logs-actions">
-              <span class="logs-count">{{ logs.length }} записей</span>
-              <button class="btn btn-ghost btn-sm" @click="clearLogs">Очистить</button>
+              <span class="logs-count">{{ t('voiceRobot.realtime.logsRecords', { n: logs.length }) }}</span>
+              <button class="btn btn-ghost btn-sm" @click="clearLogs">{{ t('voiceRobot.realtime.clearLogs') }}</button>
             </div>
           </div>
           <div class="ai-logs-content" ref="logsRef">
             <div v-if="logs.length === 0" class="logs-empty">
-              <span>Логи появятся здесь...</span>
+              <span>{{ t('voiceRobot.realtime.logsEmpty') }}</span>
             </div>
             <div v-for="log in logs" :key="log.id" class="ai-log-entry">
               <span class="ai-log-time">{{ log.time }}</span>
@@ -1835,9 +1973,9 @@ onUnmounted(() => {
               </svg>
             </div>
           </div>
-          <h3>Ожидаем звонок</h3>
-          <p class="waiting-phone">с номера <strong>+7 {{ phone }}</strong></p>
-          <p class="waiting-hint">Позвоните на <strong>+7 727 200-12-34</strong></p>
+          <h3 contenteditable="false">{{ t('voiceRobot.realtime.waitingCall') }}</h3>
+          <p class="waiting-phone" contenteditable="false">{{ t('voiceRobot.realtime.fromNumber') }} <strong>+7 {{ phone }}</strong></p>
+          <p class="waiting-hint" contenteditable="false">{{ t('voiceRobot.realtime.callTo') }} <strong>+7 700 632 01-27</strong></p>
           <div class="waiting-dots">
             <span></span><span></span><span></span>
           </div>
@@ -1849,4 +1987,161 @@ onUnmounted(() => {
 
 <style scoped>
 @import '@/assets/styles/voice-robot.css';
+
+/* Transfer to Operator */
+.transfer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 32px 16px;
+}
+
+.transfer-handoff {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.transfer-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.transfer-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.robot-avatar {
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(0, 212, 255, 0.05));
+  border: 2px solid rgba(0, 212, 255, 0.4);
+  color: var(--accent-cyan);
+}
+
+.robot-avatar svg { width: 28px; height: 28px; }
+
+.operator-avatar {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.05));
+  border: 2px solid rgba(168, 85, 247, 0.4);
+  color: #a855f7;
+  animation: operator-pulse 1.8s ease-in-out infinite;
+}
+
+.operator-avatar svg { width: 28px; height: 28px; }
+
+@keyframes operator-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.3); }
+  50% { box-shadow: 0 0 0 10px rgba(168, 85, 247, 0); }
+}
+
+.transfer-node-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.transfer-arrow-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 72px;
+}
+
+.transfer-arrow-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.transfer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  opacity: 0;
+  animation: dot-travel 1.4s ease-in-out infinite;
+}
+
+.transfer-dot.dot-1 { animation-delay: 0s; }
+.transfer-dot.dot-2 { animation-delay: 0.25s; }
+.transfer-dot.dot-3 { animation-delay: 0.5s; }
+
+@keyframes dot-travel {
+  0%   { opacity: 0; transform: translateX(-4px); }
+  30%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; transform: translateX(4px); }
+}
+
+.transfer-arrow-icon {
+  width: 20px;
+  height: 20px;
+  color: rgba(168, 85, 247, 0.7);
+}
+
+.transfer-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.transfer-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  background: rgba(168, 85, 247, 0.1);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 24px;
+  font-size: 13px;
+  color: #c084fc;
+  font-weight: 500;
+}
+
+.transfer-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a855f7;
+  animation: status-blink 1s ease-in-out infinite;
+}
+
+@keyframes status-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.transfer-reason {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.transfer-reason-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.transfer-reason-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 </style>
