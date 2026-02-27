@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Doughnut, Bar, Line } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -15,6 +16,13 @@ import {
   Filler
 } from 'chart.js'
 import { useNotification } from '@/composables/useNotification'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // Register Chart.js components
 ChartJS.register(
@@ -35,6 +43,7 @@ ChartJS.defaults.color = '#94a3b8'
 ChartJS.defaults.borderColor = 'rgba(255, 255, 255, 0.08)'
 
 const { show: showNotification } = useNotification()
+const { t } = useI18n()
 
 // Filters
 const periodFilter = ref('week')
@@ -77,7 +86,7 @@ const reachChartData = computed(() => {
   const notReached = totalCalls - reached
 
   return {
-    labels: ['Дозвонились', 'Не дозвонились'],
+    labels: [t('analytics.charts.reached'), t('analytics.charts.notReached')],
     datasets: [{
       data: [reached || 78, notReached || 22],
       backgroundColor: ['#00d4ff', '#374151'],
@@ -112,9 +121,9 @@ const resultsChartData = computed(() => {
   const busy = data.filter(d => d.result === 'busy').length || 164
 
   return {
-    labels: ['Записались', 'Перезвон', 'Отказ', 'Нет ответа', 'Занято'],
+    labels: [t('analytics.charts.booked'), t('analytics.charts.callback'), t('analytics.charts.refused'), t('analytics.charts.noAnswer'), t('analytics.charts.busy')],
     datasets: [{
-      label: 'Количество',
+      label: t('analytics.charts.quantity'),
       data: [booked, callback, refused, noAnswer, busy],
       backgroundColor: ['#22c55e', '#00d4ff', '#ef4444', '#64748b', '#eab308'],
       borderRadius: 8,
@@ -143,7 +152,7 @@ const resultsChartOptions = {
 const conversionChartData = ref({
   labels: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
   datasets: [{
-    label: 'Конверсия %',
+    label: t('analytics.charts.conversionPct'),
     data: [28, 32, 35, 29, 38, 25, 31],
     borderColor: '#a855f7',
     backgroundColor: 'rgba(168, 85, 247, 0.1)',
@@ -186,11 +195,11 @@ const funnelData = computed(() => {
   const booked = stats.value.booked || 312
 
   return [
-    { label: 'Звонки', value: total, percent: 100 },
-    { label: 'Дозвон', value: reached, percent: Math.round(reached / total * 100) },
-    { label: 'Диалог', value: dialog, percent: Math.round(dialog / total * 100) },
-    { label: 'Интерес', value: interest, percent: Math.round(interest / total * 100) },
-    { label: 'Запись', value: booked, percent: Math.round(booked / total * 100) }
+    { label: t('analytics.funnel.calls'), value: total, percent: 100 },
+    { label: t('analytics.funnel.reach'), value: reached, percent: Math.round(reached / total * 100) },
+    { label: t('analytics.funnel.dialog'), value: dialog, percent: Math.round(dialog / total * 100) },
+    { label: t('analytics.funnel.interest'), value: interest, percent: Math.round(interest / total * 100) },
+    { label: t('analytics.funnel.booking'), value: booked, percent: Math.round(booked / total * 100) }
   ]
 })
 
@@ -237,13 +246,13 @@ function generateData(count) {
     }]
   }
 
-  showNotification(`Сгенерировано ${count} записей`, 'success')
+  showNotification(t('analytics.notifications.generated', { n: count }), 'success')
 }
 
 function exportData() {
-  showNotification('Экспорт данных в CSV...', 'info')
+  showNotification(t('analytics.notifications.exportStart'), 'info')
   setTimeout(() => {
-    showNotification('Данные экспортированы', 'success')
+    showNotification(t('analytics.notifications.exportDone'), 'success')
   }, 1500)
 }
 
@@ -262,7 +271,7 @@ function formatDateTime(date) {
   const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
   if (isToday) {
-    return `Сегодня, ${time}`
+    return `${t('analytics.table.today')}, ${time}`
   }
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + `, ${time}`
 }
@@ -277,20 +286,20 @@ function getInitials(name) {
   return name.split(' ').map(n => n[0]).join('')
 }
 
-const resultLabels = {
-  booked: { text: 'Записан', class: 'success' },
-  callback: { text: 'Перезвон', class: 'pending' },
-  refused: { text: 'Отказ', class: 'failed' },
-  no_answer: { text: 'Нет ответа', class: 'pending' },
-  busy: { text: 'Занято', class: 'pending' }
-}
+const resultLabels = computed(() => ({
+  booked: { text: t('analytics.results.booked'), class: 'success' },
+  callback: { text: t('analytics.results.callback'), class: 'pending' },
+  refused: { text: t('analytics.results.refused'), class: 'failed' },
+  no_answer: { text: t('analytics.results.noAnswer'), class: 'pending' },
+  busy: { text: t('analytics.results.busy'), class: 'pending' }
+}))
 
-const misLabels = {
-  arrived: { text: 'Пришёл', class: 'success' },
-  no_show: { text: 'Не пришёл', class: 'failed' },
-  cancelled: { text: 'Отменён', class: 'pending' },
-  pending: { text: 'Ожидание', class: 'pending' }
-}
+const misLabels = computed(() => ({
+  arrived: { text: t('analytics.mis.arrived'), class: 'success' },
+  no_show: { text: t('analytics.mis.noShow'), class: 'failed' },
+  cancelled: { text: t('analytics.mis.cancelled'), class: 'pending' },
+  pending: { text: t('analytics.mis.pending'), class: 'pending' }
+}))
 
 onMounted(() => {
   generateData(50)
@@ -298,7 +307,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="analytics-page">
+  <div class="analytics-page" style="user-select: none;">
     <div class="container">
       <!-- Page Header -->
       <div class="page-header">
@@ -311,8 +320,8 @@ onMounted(() => {
             </svg>
           </div>
           <div>
-            <h1>Аналитика</h1>
-            <p class="text-secondary">Статистика звонков и записей</p>
+            <h1 contenteditable="false">{{ t('analytics.title') }}</h1>
+            <p class="text-secondary" contenteditable="false">{{ t('analytics.subtitle') }}</p>
           </div>
         </div>
         <div class="page-actions">
@@ -322,14 +331,14 @@ onMounted(() => {
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            Экспорт
+            {{ t('analytics.export') }}
           </button>
           <button class="btn btn-primary" @click="generateData(200)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M1 4v6h6"/>
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
             </svg>
-            Сгенерировать данные
+            {{ t('analytics.generateData') }}
           </button>
         </div>
       </div>
@@ -337,32 +346,47 @@ onMounted(() => {
       <!-- Filters -->
       <div class="filters-bar">
         <div class="filter-group">
-          <span class="filter-label">Период:</span>
-          <select v-model="periodFilter" class="filter-select" @change="updateCharts">
-            <option value="today">Сегодня</option>
-            <option value="week">Неделя</option>
-            <option value="month">Месяц</option>
-            <option value="quarter">Квартал</option>
-          </select>
+          <span class="filter-label">{{ t('analytics.filters.period') }}</span>
+          <Select v-model="periodFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="today">{{ t('analytics.filters.today') }}</SelectItem>
+              <SelectItem value="week">{{ t('analytics.filters.week') }}</SelectItem>
+              <SelectItem value="month">{{ t('analytics.filters.month') }}</SelectItem>
+              <SelectItem value="quarter">{{ t('analytics.filters.quarter') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="filter-group">
-          <span class="filter-label">Тип:</span>
-          <select v-model="typeFilter" class="filter-select" @change="updateCharts">
-            <option value="all">Все звонки</option>
-            <option value="incoming">Входящие</option>
-            <option value="outgoing">Исходящие</option>
-          </select>
+          <span class="filter-label">{{ t('analytics.filters.type') }}</span>
+          <Select v-model="typeFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{{ t('analytics.filters.allCalls') }}</SelectItem>
+              <SelectItem value="incoming">{{ t('analytics.filters.incoming') }}</SelectItem>
+              <SelectItem value="outgoing">{{ t('analytics.filters.outgoing') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="filter-group">
-          <span class="filter-label">Робот:</span>
-          <select v-model="robotFilter" class="filter-select" @change="updateCharts">
-            <option value="all">Все роботы</option>
-            <option value="generative">Генеративный</option>
-            <option value="scripted">Сценарный</option>
-          </select>
+          <span class="filter-label">{{ t('analytics.filters.robot') }}</span>
+          <Select v-model="robotFilter" @update:model-value="updateCharts">
+            <SelectTrigger class="filter-select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{{ t('analytics.filters.allRobots') }}</SelectItem>
+              <SelectItem value="generative">{{ t('analytics.filters.generative') }}</SelectItem>
+              <SelectItem value="scripted">{{ t('analytics.filters.scripted') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <button class="btn btn-secondary btn-sm generate-btn" @click="generateData(50)">
-          +50 записей
+          {{ t('analytics.add50') }}
         </button>
       </div>
 
@@ -370,7 +394,7 @@ onMounted(() => {
       <div class="stats-grid">
         <div class="stat-card animate-fadeInUp stagger-1">
           <div class="stat-header">
-            <span class="stat-label">Всего звонков</span>
+            <span class="stat-label">{{ t('analytics.stats.totalCalls') }}</span>
             <div class="stat-icon cyan">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/>
@@ -382,13 +406,13 @@ onMounted(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
             </svg>
-            +12% к прошлой неделе
+            {{ t('analytics.stats.weekGrowthPos', { n: 12 }) }}
           </div>
         </div>
 
         <div class="stat-card animate-fadeInUp stagger-2">
           <div class="stat-header">
-            <span class="stat-label">Дозвон</span>
+            <span class="stat-label">{{ t('analytics.stats.reachRate') }}</span>
             <div class="stat-icon green">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
@@ -401,13 +425,13 @@ onMounted(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
             </svg>
-            +3% к прошлой неделе
+            {{ t('analytics.stats.weekGrowthPos', { n: 3 }) }}
           </div>
         </div>
 
         <div class="stat-card animate-fadeInUp stagger-3">
           <div class="stat-header">
-            <span class="stat-label">Записались</span>
+            <span class="stat-label">{{ t('analytics.stats.booked') }}</span>
             <div class="stat-icon purple">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -422,13 +446,13 @@ onMounted(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
             </svg>
-            +8% к прошлой неделе
+            {{ t('analytics.stats.weekGrowthPos', { n: 8 }) }}
           </div>
         </div>
 
         <div class="stat-card animate-fadeInUp stagger-4">
           <div class="stat-header">
-            <span class="stat-label">Конверсия</span>
+            <span class="stat-label">{{ t('analytics.stats.conversion') }}</span>
             <div class="stat-icon yellow">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
@@ -441,7 +465,7 @@ onMounted(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/>
             </svg>
-            -2% к прошлой неделе
+            {{ t('analytics.stats.weekGrowthNeg', { n: 2 }) }}
           </div>
         </div>
       </div>
@@ -451,7 +475,7 @@ onMounted(() => {
         <!-- Reach Chart -->
         <div class="chart-card">
           <div class="chart-header">
-            <span class="chart-title">Дозвон / Недозвон</span>
+            <span class="chart-title" contenteditable="false">{{ t('analytics.charts.reach') }}</span>
             <span class="badge">Pie</span>
           </div>
           <div class="chart-container">
@@ -462,7 +486,7 @@ onMounted(() => {
         <!-- Results Chart -->
         <div class="chart-card">
           <div class="chart-header">
-            <span class="chart-title">Результаты звонков</span>
+            <span class="chart-title" contenteditable="false">{{ t('analytics.charts.results') }}</span>
             <span class="badge">Bar</span>
           </div>
           <div class="chart-container">
@@ -473,7 +497,7 @@ onMounted(() => {
         <!-- Conversion Chart -->
         <div class="chart-card">
           <div class="chart-header">
-            <span class="chart-title">Конверсия по дням</span>
+            <span class="chart-title" contenteditable="false">{{ t('analytics.charts.conversion') }}</span>
             <span class="badge">Line</span>
           </div>
           <div class="chart-container">
@@ -484,7 +508,7 @@ onMounted(() => {
         <!-- Funnel Chart -->
         <div class="chart-card">
           <div class="chart-header">
-            <span class="chart-title">Воронка записи</span>
+            <span class="chart-title" contenteditable="false">{{ t('analytics.charts.funnel') }}</span>
             <span class="badge">Funnel</span>
           </div>
           <div class="funnel-chart">
@@ -502,21 +526,21 @@ onMounted(() => {
       <!-- Attendance Stats -->
       <div class="chart-card mb-xl">
         <div class="chart-header">
-          <span class="chart-title">Статистика посещений (из МИС)</span>
+          <span class="chart-title" contenteditable="false">{{ t('analytics.attendance.title') }}</span>
           <span class="badge badge-purple">МИС</span>
         </div>
         <div class="attendance-grid">
           <div class="attendance-item arrived">
             <div class="attendance-value">{{ stats.arrived }}</div>
-            <div class="attendance-label">Пришли на приём</div>
+            <div class="attendance-label">{{ t('analytics.attendance.arrived') }}</div>
           </div>
           <div class="attendance-item no-show">
             <div class="attendance-value">{{ stats.noShow }}</div>
-            <div class="attendance-label">Не пришли</div>
+            <div class="attendance-label">{{ t('analytics.attendance.noShow') }}</div>
           </div>
           <div class="attendance-item cancelled">
             <div class="attendance-value">{{ stats.cancelled }}</div>
-            <div class="attendance-label">Отменили</div>
+            <div class="attendance-label">{{ t('analytics.attendance.cancelled') }}</div>
           </div>
         </div>
       </div>
@@ -524,20 +548,20 @@ onMounted(() => {
       <!-- Calls Table -->
       <div class="table-container">
         <div class="table-header">
-          <span class="table-title">Последние звонки</span>
-          <span class="badge">{{ callsData.length }} записей</span>
+          <span class="table-title" contenteditable="false">{{ t('analytics.table.title') }}</span>
+          <span class="badge">{{ t('analytics.table.records', { n: callsData.length }) }}</span>
         </div>
         <div class="table-wrapper">
           <table class="data-table">
             <thead>
               <tr>
-                <th>Время</th>
-                <th>Пациент</th>
-                <th>Телефон</th>
-                <th>Тип</th>
-                <th>Результат</th>
-                <th>Длительность</th>
-                <th>Статус МИС</th>
+                <th>{{ t('analytics.table.time') }}</th>
+                <th>{{ t('analytics.table.patient') }}</th>
+                <th>{{ t('analytics.table.phone') }}</th>
+                <th>{{ t('analytics.table.type') }}</th>
+                <th>{{ t('analytics.table.result') }}</th>
+                <th>{{ t('analytics.table.duration') }}</th>
+                <th>{{ t('analytics.table.misStatus') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -550,7 +574,7 @@ onMounted(() => {
                   </div>
                 </td>
                 <td style="font-family: var(--font-mono); font-size: 0.85rem;">{{ row.phone }}</td>
-                <td>{{ row.type === 'incoming' ? 'Входящий' : 'Исходящий' }}</td>
+                <td>{{ row.type === 'incoming' ? t('analytics.table.incoming') : t('analytics.table.outgoing') }}</td>
                 <td>
                   <span class="status-badge" :class="resultLabels[row.result].class">
                     {{ resultLabels[row.result].text }}
@@ -895,17 +919,36 @@ onMounted(() => {
 }
 
 .filter-select {
+  min-width: 140px;
   padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-default);
+  background-color: var(--bg-secondary) !important;
+  border: 1px solid var(--border-default) !important;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 0.9rem;
+  height: auto;
 }
 
-.filter-select:focus {
+.filter-select:hover {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.filter-select:focus,
+.filter-select:focus-visible {
   outline: none;
-  border-color: var(--accent-cyan);
+  border-color: var(--accent-cyan) !important;
+  background-color: var(--bg-secondary) !important;
+  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+}
+
+/* Deep selector to override shadcn styles */
+.filter-group :deep(button[data-slot="select-trigger"]) {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-default) !important;
+}
+
+.filter-group :deep(button[data-slot="select-trigger"]:hover) {
+  background-color: var(--bg-tertiary) !important;
 }
 
 .generate-btn {

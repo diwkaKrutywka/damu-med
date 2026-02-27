@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const currentTime = ref('')
 const currentDate = ref('')
 
@@ -28,29 +30,26 @@ onUnmounted(() => {
       <div class="terminal-demo">
         <!-- Info Panel -->
         <div class="info-panel animate-fadeInUp">
-          <h2>Терминал самозаписи</h2>
-          <p class="text-secondary">
-            Пациенты записываются за 3 клика. Выбор врача, оплата Kaspi, талон — без очереди.
-            Интегрирован с DamuMed.
-          </p>
+          <h2 contenteditable="false">{{ t('terminal.title') }}</h2>
+          <p class="text-secondary" contenteditable="false">{{ t('terminal.description') }}</p>
 
           <div class="stats-grid mt-xl">
             <div class="stat-card">
-              <div class="stat-value text-gradient">3</div>
-              <div class="stat-label">клика до записи</div>
+              <div class="stat-value text-gradient" contenteditable="false">3</div>
+              <div class="stat-label" contenteditable="false">{{ t('terminal.stats.clicks') }}</div>
             </div>
             <div class="stat-card">
-              <div class="stat-value text-gradient">−60%</div>
-              <div class="stat-label">нагрузка на регистратуру</div>
+              <div class="stat-value text-gradient" contenteditable="false">−60%</div>
+              <div class="stat-label" contenteditable="false">{{ t('terminal.stats.load') }}</div>
             </div>
             <div class="stat-card">
-              <div class="stat-value text-gradient">24/7</div>
-              <div class="stat-label">доступность</div>
+              <div class="stat-value text-gradient" contenteditable="false">24/7</div>
+              <div class="stat-label" contenteditable="false">{{ t('terminal.stats.availability') }}</div>
             </div>
           </div>
 
           <ul class="features-list mt-xl">
-            <li v-for="feature in ['Голосовой ввод и управление', 'Оплата через Kaspi QR', 'Печать талона на месте', 'Интеграция с МИС', 'Работа без интернета']" :key="feature">
+            <li v-for="feature in t('terminal.features')" :key="feature">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
@@ -73,8 +72,8 @@ onUnmounted(() => {
                     <circle cx="12" cy="7" r="4"/>
                   </svg>
                 </div>
-                <p>Здравствуйте!</p>
-                <p class="text-secondary" style="font-size: 0.9rem;">Нажмите, чтобы начать запись</p>
+                <p>{{ t('terminal.kiosk.greeting') }}</p>
+                <p class="text-secondary" style="font-size: 0.9rem;" contenteditable="false">{{ t('terminal.kiosk.tapToStart') }}</p>
               </div>
 
               <div class="kiosk-actions">
@@ -85,7 +84,7 @@ onUnmounted(() => {
                     <line x1="8" y1="2" x2="8" y2="6"/>
                     <line x1="3" y1="10" x2="21" y2="10"/>
                   </svg>
-                  Записаться на приём
+                  {{ t('terminal.kiosk.bookAppointment') }}
                 </button>
                 <div class="kiosk-lang">
                   <button class="kiosk-lang-btn active">KZ</button>
@@ -97,11 +96,11 @@ onUnmounted(() => {
           <div class="kiosk-bottom">
             <div class="kiosk-printer">
               <div class="printer-slot"></div>
-              <span>Принтер талонов</span>
+              <span>{{ t('terminal.kiosk.ticketPrinter') }}</span>
             </div>
             <div class="kiosk-payment">
               <div class="kaspi-logo">Kaspi</div>
-              <span>Оплата QR</span>
+              <span>{{ t('terminal.kiosk.paymentQR') }}</span>
             </div>
           </div>
           <div class="kiosk-stand"></div>
