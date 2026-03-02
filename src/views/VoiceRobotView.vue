@@ -164,7 +164,7 @@ const openSession = () => {
   showWaitingModal.value = true
 
   // Подключение к WebSocket
-  const wsUrl = `wss://78.40.109.44:8000/ws/front/${sessionId.value}`
+  const wsUrl = `wss://demohub-bridge.bpcontact.kz/ws/front/${sessionId.value}`
   websocket = new WebSocket(wsUrl)
 
   websocket.onopen = () => {
